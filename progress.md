@@ -83,3 +83,4 @@ mypet/
 - PySide6 6.12 的 `QMovie` 没有 `setLoopCount`：单击播完靠 `frameChanged` 检测末帧 + 可选 `click_max_ms` 定时截断双保险
 - 拖动偏移量 `_drag_offset` 必须在 mousePressEvent 里用「按下点全局坐标 − 窗口左上角」算一次，拖动中重算会导致窗口跳到鼠标左上方
 - 斜向速度是浮点，直接对位置取整会因分量 <1px 而卡住，需用小数累加器（`_walk_fx/_walk_fy`）
+- git 全局配置 `http.sslverify=false` 是必需的，不能删：Watt Toolkit（Steam++）加速 GitHub 时会把 hosts 里 `github.com` 等域名指向 `127.0.0.1` 并用自带 `SteamTools Certificate` 做中间人代理，而 git 用自己的 CA bundle（不含该证书），开启校验会报 `SSL peer certificate or SSH remote key was not OK`，导致 push/fetch 失败
