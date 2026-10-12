@@ -5,21 +5,25 @@ window:
   start: bottom_right   # bottom_right | center
 
 behavior:
-  walk_enabled: true     # 是否启用随机走动
+  walk_enabled: true     # 是否启用走动；false 时行为决策只在「随机动画 / 继续待机」之间选
   walk_tick_ms: 30       # 走动位移定时器间隔（毫秒）
   walk_speed: 3          # 每次位移像素数
-  walk_interval_min: 20  # 上次操作（点击/拖动等）后随机走动的最小延迟（秒）
-  walk_interval_max: 40  # 上次操作（点击/拖动等）后随机走动的最大延迟（秒）
+  idle_duration_min: 10  # 待机随机时长下限（秒）：本次待机持续多久后发起一次行为决策
+  idle_duration_max: 40  # 待机随机时长上限（秒）
+  # 待机结束后的行为决策概率（三项按和归一化，和为 1 时即为精确概率；三项全 0 则一直待机）
+  walk_chance: 0.5       # 决策为「走动」的概率
+  random_chance: 0.3     # 决策为「随机动作」的概率：原地从首帧完整播一个 random_actions GIF（不位移）
+  continue_idle_chance: 0.2 # 决策为「继续待机」的概率：保持 stand.gif 并重新计时
+  random_max_ms: 0       # 随机动画截断上限（毫秒）；0 = 从首帧完整播一遍再回待机
   walk_duration_min: 3   # 单次走动时长下限（秒）
   walk_duration_max: 8   # 单次走动时长上限（秒）
-  lost_chance: 1       # 每次走动结束后播放“走丢了”动画的概率（0~1）
+  lost_chance: 0.4       # 每次走动结束后播放“走丢了”动画的概率（0~1）
   lost_max_ms: 0         # 走丢动画截断上限（毫秒）；0 = 完整播完 get lost.gif 后回待机
   click_max_ms: 0        # 单击动画截断上限（毫秒）；0 = 完整播完 click.gif 后回待机
-  idle_random_chance: 1 # 进入待机时改播 random/ 目录里某个 GIF（而非 stand.gif）的概率（0~1）
 
 animation:
   idle: assets/idle/stand.gif
-  idle_random:              # 待机时可随机替换 stand.gif 的 GIF 列表
+  random_actions:          # 「随机动作」可选 GIF 列表（决策选中时原地完整播一遍，不位移）
     - assets/random/pillow talk.gif
     - assets/random/sleepy.gif
   walk_left: assets/walk/walk-left.gif

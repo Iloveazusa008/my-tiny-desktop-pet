@@ -15,7 +15,7 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     for key, value in list(anim.items()):
         if not value:  # talk/error 等素材未提供时留空，跳过
             continue
-        if isinstance(value, list):  # idle_random 等列表型路径
+        if isinstance(value, list):  # random_actions 等列表型路径
             anim[key] = [str(ROOT / v) if not Path(v).is_absolute() else v for v in value]
             continue
         p = Path(value)

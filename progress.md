@@ -20,7 +20,7 @@ mypet/
 │   ├── walk/get lost.gif     # 走丢（每次走完后按概率播放一次）
 │   ├── click/click.gif       # click
 │   ├── drag/drag.gif         # drag
-│   └── random/              # 待机时随机混播的 GIF（按 idle_random_chance 概率替换 stand.gif）
+│   └── random/              # 「随机动作」的 GIF（决策选中时原地从首帧完整播一遍）
 │       ├── pillow talk.gif
 │       └── sleepy.gif
 └── src/
@@ -35,9 +35,9 @@ mypet/
 |---|---|
 | `main.py` | 创建 QApplication，加载配置，显示 PetWindow |
 | `start.bat` | 双击启动：切到脚本目录、UTF-8 代码页、运行 main.py，失败时暂停窗口便于看报错 |
-| `config.py` | 读取 `config.yaml`，把 animation 里的相对路径（含列表型 `idle_random`）拼成绝对路径 |
-| `src/pet_window.py` | 桌宠窗口：Frameless + WA_TranslucentBackground + WindowStaysOnTopHint + Tool；状态机 idle/walk/click/drag/lost；QMovie 播 GIF；360° 随机走动、碰边按轴反向、按水平分量切左右走 GIF；左键单击完整播 click、按住移动播 drag（跟手拖动）；每次走完按概率播 get lost.gif（走丢）后回待机；每次进待机按概率从 stand.gif 与 random/ 目录 GIF 里挑一个播 |
-| `config.yaml` | 窗口尺寸、启动位置、各状态 GIF 路径、走动速度/时长/操作后延迟、click/lost 截断上限、lost 触发概率、idle_random_chance |
+| `config.py` | 读取 `config.yaml`，把 animation 里的相对路径（含列表型 `random_actions`）拼成绝对路径 |
+| `src/pet_window.py` | 桌宠窗口：Frameless + WA_TranslucentBackground + WindowStaysOnTopHint + Tool；状态机 idle/walk/random/click/drag/lost；QMovie 播 GIF；自主行为循环：待机随机时长（`idle_duration_min/max`，待机固定播 stand.gif）→ 按 `walk_chance`/`random_chance`/`continue_idle_chance` 三项概率加权决策「走动 / 随机动画 / 继续待机」→ 执行动作 → 回待机重新计时；走动 360° 随机、碰边按轴反向、按水平分量切左右走 GIF；随机动作从 `random_actions` 挑一个原地从首帧完整播一遍（不位移，末帧检测，`random_max_ms` 可截断）；左键单击完整播 click、按住移动播 drag（跟手拖动），用户操作打断当前动作；走完按概率播 get lost.gif |
+| `config.yaml` | 窗口尺寸、启动位置、各状态 GIF 路径、走动速度/时长、待机随机时长、三项行为决策概率、click/lost/random 截断上限、lost 触发概率 |
 
 ## 已实现的功能
 
@@ -51,13 +51,15 @@ mypet/
 - [x] 走动状态机：随机 360° 方向走动（可斜向/上下），小数累加防取整卡住
 - [x] 碰屏幕四边按对应轴反转速度分量并钳制位置（碰左右翻 vx、碰上下翻 vy）
 - [x] 走动 GIF 按水平分量选择：`vx < 0` 播 `walk-left.gif`，否则 `walk-right.gif`，反向瞬间自动切换
-- [x] 走动延迟：上次任意操作（点击/拖动等）结束后 10~60s 随机发起走动（可配）
+- [x] 自主行为循环（待机→决策→执行→回待机）：待机随机时长（`idle_duration_min`~`idle_duration_max`，可配）到点后，在「走动 / 随机动画 / 继续待机」三项间按 `walk_chance`/`random_chance`/`continue_idle_chance` 加权随机决策（三项按和归一化，和为 1 时即精确概率；全 0 则一直待机）；动作播完回待机重新随机计时
+- [x] 随机动作（random 状态）：决策选中时从 `animation.random_actions` 列表挑一个 GIF，原地从首帧完整播一遍（不位移）后回待机（与 click/lost 同用 frameChanged 末帧检测；`random_max_ms: 0` 不截断，可配正值兜底）；无素材时退回继续待机
 - [x] 左键单击完整播放 click.gif 一次后回待机（末帧检测结束；`click_max_ms: 0` 不截断，可配正值截断）
-- [x] 走动中被点击/拖动：先中断走动播对应动画，操作结束后重新计时再走
+- [x] 用户操作打断：点击/拖动打断当前动作（走动 / 随机动画 / 待机计时），播对应动画，操作结束后回待机重新计时
 - [x] `set_walk_enabled()` 开关走动（供后续右键菜单调用）
 - [x] 走丢效果：每次走动结束后按概率（`lost_chance`，默认 0.3）播放 `walk/get lost.gif` 一次后回待机；支持 `lost_max_ms` 截断上限
-- [x] 待机随机混播：每次进入待机按概率（`idle_random_chance`）从 `idle/stand.gif` 与 `random/` 目录 GIF 里挑一个循环播；`idle_random` 列表写在配置里，`talk`/`error` 暂留空
+- [x] 移除待机随机混播（原 `idle_random_chance`）：待机固定播 `stand.gif`，`random/` 目录 GIF（`animation.random_actions` 列表）只作为决策后的「随机动作」出现，职责单一
 - [x] 修复 `config.py` 对空动画路径（`talk:`/`error:` 留空为 None）的崩溃
+- [x] 修复素材目录重组导致的启动空白：`stand.gif` 迁至 `assets/idle/`，`config.yaml` 路径同步更新；`talk`/`error` 改为留空
 
 ## 已知问题 / TODO
 
@@ -80,7 +82,9 @@ mypet/
 
 ## 备注 / 踩坑记录
 
-- PySide6 6.12 的 `QMovie` 没有 `setLoopCount`：单击播完靠 `frameChanged` 检测末帧 + 可选 `click_max_ms` 定时截断双保险
+- PySide6 6.12 的 `QMovie` 没有 `setLoopCount`：单次/完整播完靠 `frameChanged` 检测末帧（`_on_one_shot_frame`）+ 可选 `*_max_ms` 定时截断双保险；click/lost/random 共用此机制（见 `ONE_LOOP_STATES`）
+- 随机动画「完整播一遍」= 从首帧播到末帧即结束。当前 `assets/random/` 素材约 101 帧、单遍约 10 秒，嫌长可配 `random_max_ms` 截断
+- 待机动画现在固定用 `idle` 键（stand.gif），`random_action_*` 动画只在 RANDOM 状态播放，二者不共用；进入 RANDOM 时 `_set_state` 统一 `jumpToFrame(0)` 保证每次从头完整播
 - 拖动偏移量 `_drag_offset` 必须在 mousePressEvent 里用「按下点全局坐标 − 窗口左上角」算一次，拖动中重算会导致窗口跳到鼠标左上方
 - 斜向速度是浮点，直接对位置取整会因分量 <1px 而卡住，需用小数累加器（`_walk_fx/_walk_fy`）
 - git 全局配置 `http.sslverify=false` 是必需的，不能删：Watt Toolkit（Steam++）加速 GitHub 时会把 hosts 里 `github.com` 等域名指向 `127.0.0.1` 并用自带 `SteamTools Certificate` 做中间人代理，而 git 用自己的 CA bundle（不含该证书），开启校验会报 `SSL peer certificate or SSH remote key was not OK`，导致 push/fetch 失败
