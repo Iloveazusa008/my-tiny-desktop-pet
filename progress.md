@@ -77,6 +77,8 @@ mypet/
 - 2026-10-12：首次提交 `feat: 桌宠项目初始版本`，内容为代码 + 配置 + handbook + progress.md + 8 个 GIF 素材（约 11MB，纳入版本控制）
 - 2026-10-12：打标签 `v1.0.0` 标记当前稳定版本
 - 2026-10-12：添加远端 `origin` → `https://github.com/Iloveazusa008/my-tiny-desktop-pet.git`，`git push -u origin main --tags` 推送至 GitHub（账号 `Iloveazusa008`）
+- 2026-10-12：提交 `2d214c2 docs(progress): 记录 git 初始化与 sslverify=false 踩坑原因` 并推送
+- 2026-10-12：提交 `600e6da feat: 重构自主行为循环，新增随机动作状态`（4 文件，+121/−69），打标签 `v2.0.0`（备注：修改了动作循环逻辑），推送 `main` 与标签至 GitHub
 
 日常提交流程：`git add .` → `git commit -m "描述"` → `git push`；确认某个版本不错时可用 `git tag v1.x.x` 再 `git push --tags`。
 
