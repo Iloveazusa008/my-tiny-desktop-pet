@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, Qt, QTimer
-from PySide6.QtGui import QMovie, QPainter
-from PySide6.QtWidgets import QApplication, QLabel, QWidget
+from PySide6.QtGui import QAction, QMovie, QPainter
+from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
+
+from .chat_dialog import ChatDialog
+from .config import CONFIG_PATH
 
 IDLE = "idle"
 WALK = "walk"
@@ -41,6 +45,7 @@ class PetWindow(QWidget):
         self._dragging = False
         self._press_pos: QPoint | None = None
         self._drag_offset: QPoint | None = None
+        self._chat_dialog: ChatDialog | None = None  # 非 None 即对话进行中
 
         self._click_cap_timer = QTimer(self)
         self._click_cap_timer.setSingleShot(True)
@@ -93,6 +98,11 @@ class PetWindow(QWidget):
     @property
     def state(self) -> str:
         return self._state
+
+    @property
+    def chat_open(self) -> bool:
+        """对话框是否打开：打开期间桌宠原地待机，不发起任何自主行为。"""
+        return self._chat_dialog is not None
 
     def _anim_key(self, state: str) -> str:
         if state == WALK:
@@ -166,6 +176,8 @@ class PetWindow(QWidget):
 
     def _schedule_next_behavior(self) -> None:
         """随机待机一段时长（idle_duration_min~idle_duration_max 秒）后做一次行为决策。"""
+        if self.chat_open:
+            return  # 对话期间原地待机，不排下一次决策（由 _on_chat_closed 恢复）
         self._idle_timer.start(
             self._rand_ms("idle_duration_min", "idle_duration_max", 10, 60)
         )
@@ -181,7 +193,7 @@ class PetWindow(QWidget):
 
     def _decide_action(self) -> None:
         """待机到点：按三项概率在 走动 / 随机动画 / 继续待机 之间加权随机并执行。"""
-        if self._state != IDLE:
+        if self.chat_open or self._state != IDLE:
             return
         choices = (
             (WALK, self._weight("walk_chance", 0.5) if self.walk_enabled else 0.0),
@@ -357,6 +369,82 @@ class PetWindow(QWidget):
         elif self._state != CLICK:
             self._on_interaction_done()
         event.accept()
+
+    # ---------- 右键菜单 ----------
+
+    def contextMenuEvent(self, event) -> None:
+        self._enter_idle()  # 右键：打断当前动作（走动/随机动画/点击），形象先回到待机
+        self._idle_timer.stop()  # 菜单期间保持静止，不发起新的行为决策
+        menu, handlers = self._build_context_menu()
+        chosen = self._exec_menu(menu, event.globalPos())
+        handler = handlers.get(chosen)
+        if handler is not None:
+            handler()
+        if self._state == IDLE and not self._idle_timer.isActive():
+            self._schedule_next_behavior()  # 菜单关闭后恢复自主行为计时
+
+    def _exec_menu(self, menu: QMenu, pos: QPoint) -> QAction | None:
+        """原生阻塞式弹出菜单，返回被点中的动作（取消选择为 None）；抽一层便于测试。"""
+        return menu.exec(pos)
+
+    def _build_context_menu(self) -> tuple[QMenu, dict]:
+        """构建右键菜单，返回 (菜单, 动作→回调)。菜单承担全部控制入口。"""
+        menu = QMenu(self)
+        handlers: dict = {}
+        handlers[menu.addAction("开始对话")] = self._on_chat_requested
+        menu.addSeparator()
+        handlers[menu.addAction("暂停走动" if self.walk_enabled else "恢复走动")] = (
+            self._toggle_walk
+        )
+        handlers[menu.addAction("回到屏幕中央")] = lambda: self._place("center")
+        handlers[menu.addAction("打开配置文件")] = self._open_config_file
+        menu.addSeparator()
+        handlers[menu.addAction("退出")] = QApplication.quit
+        return menu, handlers
+
+    def _toggle_walk(self) -> None:
+        self.set_walk_enabled(not self.walk_enabled)
+
+    def _on_chat_requested(self) -> None:
+        """右键菜单「开始对话」：唤起对话框，期间桌宠原地待机。"""
+        if self._chat_dialog is not None:
+            self._chat_dialog.raise_()
+            self._chat_dialog.activateWindow()
+            return
+        dialog = ChatDialog()
+        dialog.closed.connect(self._on_chat_closed)
+        self._chat_dialog = dialog
+        self._enter_idle()  # 回待机播 stand.gif
+        self._idle_timer.stop()  # 对话期间不发起自主行为（_schedule_next_behavior 也会被 chat_open 拦住）
+        dialog.show()
+        dialog.raise_()
+        self._place_dialog(dialog)  # show 后 frameGeometry 才可靠
+        dialog.activateWindow()
+        dialog.focus_input()
+
+    def _on_chat_closed(self) -> None:
+        """对话框关闭：清空引用（记忆已在 ChatDialog.closeEvent 清空），恢复自主行为计时。"""
+        self._chat_dialog = None
+        if self._state == IDLE and not self._idle_timer.isActive():
+            self._schedule_next_behavior()
+
+    def _place_dialog(self, dialog: QWidget) -> None:
+        """把对话框放在桌宠正上方，放不下则落到下方，并按外框钳制在屏幕内。"""
+        screen = QApplication.primaryScreen().availableGeometry()
+        frame = dialog.frameGeometry()
+        x = self.x() + (self.width() - frame.width()) // 2
+        y = self.y() - frame.height() - 8
+        if y < screen.y():
+            y = self.y() + self.height() + 8
+        x = min(max(x, screen.x()), screen.x() + screen.width() - frame.width())
+        y = min(max(y, screen.y()), screen.y() + screen.height() - frame.height())
+        dialog.move(x, y)
+
+    def _open_config_file(self) -> None:
+        try:
+            os.startfile(str(CONFIG_PATH))  # Windows only
+        except OSError:
+            pass
 
     # ---------- 窗口 ----------
 
