@@ -8,6 +8,7 @@
 mypet/
 ├── handbook.txt          # 纲领性文件（只读依据）
 ├── progress.md           # 本文件
+├── chat_dialog_style_guide.txt  # 对话框外观改造的规格说明（执行摘要 + 详细要求 + 验收标准）
 ├── .gitignore            # 排除 __pycache__ / _test_log.txt / venv 等
 ├── requirements.txt      # 依赖：PySide6 / PyYAML / openai
 ├── start.bat             # 启动脚本（切到脚本目录，跑 main.py，出错暂停）
@@ -30,7 +31,7 @@ mypet/
 └── src/
     ├── __init__.py
     ├── config.py         # 加载 config.yaml，解析相对动画路径为绝对路径
-    ├── chat_dialog.py    # 对话框：右键「开始对话」唤起，多轮输入骨架，关闭即清空记忆
+    ├── chat_dialog.py    # 对话框：右键「开始对话」唤起，白底紫边圆角自绘窗体，多轮输入骨架，关闭即清空记忆
     └── pet_window.py     # 主窗口：无边框、透明、置顶；状态机 + 走动/点击/拖动 + 右键菜单 + 对话
 ```
 
@@ -41,9 +42,9 @@ mypet/
 | `main.py` | 创建 QApplication，加载配置，显示 PetWindow |
 | `start.bat` | 双击启动：切到脚本目录、UTF-8 代码页、运行 main.py，失败时暂停窗口便于看报错 |
 | `config.py` | 读取 `config.yaml`，把 animation 里的相对路径（含列表型 `random_actions`）拼成绝对路径 |
-| `src/pet_window.py` | 桌宠窗口：Frameless + WA_TranslucentBackground + WindowStaysOnTopHint + Tool；状态机 idle/walk/random/click/drag/lost；QMovie 播 GIF；自主行为循环：待机随机时长（`idle_duration_min/max`，待机固定播 stand.gif）→ 按 `walk_chance`/`random_chance`/`continue_idle_chance` 三项概率加权决策「走动 / 随机动画 / 继续待机」→ 执行动作 → 回待机重新计时；走动 360° 随机、碰边按轴反向、按水平分量切左右走 GIF；随机动作从 `random_actions` 挑一个原地从首帧完整播一遍（不位移，末帧检测，`random_max_ms` 可截断）；左键单击完整播 click、按住移动播 drag（跟手拖动），用户操作打断当前动作；走完按概率播 get lost.gif；右键弹原生 QMenu 菜单（`contextMenuEvent` 先 `_enter_idle()` 回待机并停计时 → `_build_context_menu()` 返回 菜单+动作→回调 映射 → `_exec_menu()` 弹出并按映射分发 → 关闭后恢复计时）；对话管理：`_on_chat_requested` 开对话框（期间 `chat_open` 为真，`_schedule_next_behavior`/`_decide_action` 被拦住保持原地待机），`_on_chat_closed` 恢复计时 |
-| `src/chat_dialog.py` | 对话框 `ChatDialog`：QPlainTextEdit 只读日志 + QLineEdit 输入 + 发送按钮；`_history` 仅存本次会话；Esc 快捷键、失活（点外部）即 `close()`，`closeEvent` 清空历史并 emit `closed` 信号（`WA_DeleteOnClose`）；AI 未接入，暂只回显用户消息 |
-| `config.yaml` | 窗口尺寸、启动位置、各状态 GIF 路径、走动速度/时长、待机随机时长、三项行为决策概率、click/lost/random 截断上限、lost 触发概率 |
+| `src/pet_window.py` | 桌宠窗口：Frameless + WA_TranslucentBackground + WindowStaysOnTopHint + Tool；状态机 idle/walk/random/click/drag/lost；QMovie 播 GIF；自主行为循环：待机随机时长（`idle_duration_min/max`，待机固定播 stand.gif）→ 按 `walk_chance`/`random_chance`/`continue_idle_chance` 三项概率加权决策「走动 / 随机动画 / 继续待机」→ 执行动作 → 回待机重新计时；走动 360° 随机、碰边按轴反向、按水平分量切左右走 GIF；随机动作从 `random_actions` 挑一个原地从首帧完整播一遍（不位移，末帧检测，`random_max_ms` 可截断）；左键单击完整播 click、按住移动播 drag（跟手拖动），用户操作打断当前动作；走完按概率播 get lost.gif；右键弹原生 QMenu 菜单（`contextMenuEvent` 先 `_enter_idle()` 回待机并停计时 → `_build_context_menu()` 返回 菜单+动作→回调 映射 → `_exec_menu()` 弹出并按映射分发 → 关闭后恢复计时）；对话管理：`_on_chat_requested` 开对话框（期间 `chat_open` 为真，`_schedule_next_behavior`/`_decide_action` 被拦住保持原地待机），`_on_chat_closed` 恢复计时；对话期间拖桌宠时对话框同步跟随，点击/拖动不切 CLICK/DRAG 动画（始终 stand.gif）；对话框永久停靠角色上/下侧（`DIALOG_GAP=8`、`_dialog_side`、`_dialog_dx`），拖动时由「被拖方请求位置 + 停靠侧」经 `_drag_pair`/`_place_pair` 推出双方位置（`_dialog_anchor`/`_pet_anchor`）、顶到上/下边框翻面（`_should_flip`）、组合外框整体平移钳入屏内（`_pair_shift`），是唯一的落位入口；`_clamp_to_screen` 按外框钳单个窗口（无对话框时的回退路径） |
+| `src/chat_dialog.py` | 对话框 `ChatDialog`：QPlainTextEdit 只读日志 + QLineEdit 输入 + 发送按钮；`_history` 仅存本次会话；小叉（objectName `closeButton`）、Esc 快捷键、失活（点外部）三种方式均 `close()`，`closeEvent` 清空历史并 emit `closed` 信号（`WA_DeleteOnClose`）；AI 未接入，暂只回显用户消息；外观按 `chat_dialog_style_guide.txt`：无系统装饰（Frameless + WA_TranslucentBackground），外层（窗体本身）margin=20 留阴影空间，内层 `QWidget#inner` QSS 白底 `#FFFFFF` + 2px 紫边 `#8A2BE2` + 圆角 12 + QGraphicsDropShadowEffect 阴影；顶部行只放右上角小叉、无标题文字，整条兼拖动区（eventFilter 按 header 区分）；日志区 NoFrame + 透明背景，内容直接写在白底上；构造函数接收 `input_placeholder`（来自 `chat_dialog.input_placeholder` 配置，留空/缺失回退内置默认） |
+| `config.yaml` | 窗口尺寸、启动位置、各状态 GIF 路径、走动速度/时长、待机随机时长、三项行为决策概率、click/lost/random 截断上限、lost 触发概率、`chat_dialog.input_placeholder`（输入框提示文案，可个性化） |
 
 ## 已实现的功能
 
@@ -71,6 +72,15 @@ mypet/
 - [x] 随机动画素材扩充：`animation.random_actions` 增至 6 项（新增 dance / look around / groom myself / wind flow）；行为参数调优：待机 10~40s→5~20s、`walk_chance` 0.5→0.6、`continue_idle_chance` 0.2→0.1、单次走动 3~8s→4~8s
 - [x] 对话框（AI 未接入的最小版，`src/chat_dialog.py`）：右键菜单「开始对话」唤起，桌宠正上方落位（放不下落下方、按外框钳制屏内）；只读日志 + 输入框 + 发送（Enter/按钮均可）多轮输入骨架，`_history` 仅存本次会话；关闭方式 X / Esc / 点外部（窗口失活即关），`closeEvent` 清空记忆并 emit `closed`，`WA_DeleteOnClose` 销毁实例（下次打开为全新对象）；重复唤起只 raise 已开窗口
 - [x] 对话期间原地待机：开框时 `_enter_idle()` 回播 stand.gif 并停待机计时，`chat_open` 拦住 `_schedule_next_behavior`/`_decide_action`（期间左键点完 click 也不恢复计时）；关框后 `_on_chat_closed` 恢复自主行为计时
+- [x] 对话框外观自绘（依 `chat_dialog_style_guide.txt`）：去系统装饰（Frameless + 透明），白底紫边圆角 + 阴影，右上角紫色「×」小叉（hover 变深紫，点击走原 close() 流程），标题区可拖动窗口；视觉参数集中为模块常量（背景/边框色宽/圆角/阴影/外层 margin/小叉），无第三方 UI 库；原有关闭逻辑、信号、记忆清空、落位、raise 全部不变
+- [x] 修复关对话框闪退：关闭对话框（小叉 / 点形象失活）曾连带退出整个程序——桌宠是 `Qt.Tool` 不计入「最后一个可见窗口」，对话框是唯一普通窗口，关掉即触发 QApplication 默认 `quitOnLastWindowClosed`；`main.py` 已设 `app.setQuitOnLastWindowClosed(False)`，程序只由菜单「退出」结束；关框后 `_on_chat_closed` 正常恢复待机-动作循环
+- [x] 对话期间联动拖动：拖桌宠时对话框跟随、拖对话框标题区时桌宠跟随（`ChatDialog.drag_moved(QPoint)` 信号），二者相对位置保持不变（最初各自 `move` 同步位移，后由下方「拖动不重叠+翻面」改为整体落位裁决）
+- [x] 修复拖动时对话框消失：对话框「点外部即关」由 WindowDeactivate 触发，桌宠是 Tool 窗口、一点击就抢激活，按下瞬间就被当成「点外部」而关闭；给桌宠加 `WindowDoesNotAcceptFocus`（Windows 下即 WS_EX_NOACTIVATE），点击/拖动桌宠不再抢激活，对话框保持打开并联动跟随；点其他应用/桌面仍失活关闭，×/Esc 不变。代价：对话框开着时点桌宠不再关闭对话框（原先点形象即关）
+- [x] 对话期间形象始终待机动画：`chat_open` 时点击不进 CLICK、拖动不进 DRAG（始终 stand.gif）；关框后恢复原有 click/drag 表现
+- [x] 拖动不出屏：新增 `_clamp_to_screen(widget, pos)` 按外框把窗口钳制在主屏 `availableGeometry` 内；拖桌宠（`mouseMoveEvent`）、对话框跟随位移、拖对话框带桌宠三条路径统一钳制，屏内拖动仍完全跟手、贴边即停；`_place_dialog` 也改为复用该钳制（后由下方「拖动不重叠+翻面」改为按整体外框钳制）
+- [x] 拖动不重叠 + 边框翻面：对话框改为永久停靠角色上/下侧（新常量 `DIALOG_GAP=8`、`DIALOG_ABOVE/BELOW`，成员 `_dialog_side` 记停靠侧、`_dialog_dx` 记水平相对偏移，`_place_dialog` 落位时一并记录）；拖动时不再「各自位移」，而是由「被拖方的请求位置 + 停靠侧」经 `_drag_pair` → `_place_pair`（唯一落位入口）推出双方位置：`_dialog_anchor`（桌宠→对话框）/`_dialog` 对应 `_pet_anchor`（对话框→桌宠）反推，`_pair_box` 求组合外框，`_should_flip` 判定对话框被顶到上/下边框（`DIALOG_ABOVE` 且 `box.top()<screen.top()`、`DIALOG_BELOW` 且 `box.bottom()>screen.bottom()`，栈高超过屏高则不翻）则翻到另一侧（每次落位至多翻一次），最后 `_pair_shift` 把组合外框整体平移钳入主屏可用区；翻面/钳制改写落位后，`mouseMoveEvent`（桌宠侧）与 `ChatDialog.eventFilter`（对话框侧）都必须按当前实际位置重算 `_drag_offset`，否则下一次 move 仍按旧偏移把窗口拽回、翻面来回抖；`_place("center")` 落位后也经 `_drag_pair` 重新停靠，保证菜单「回到屏幕中央」不压住对话框；无对话框时回退 `_clamp_to_screen` 单窗口钳制。临时脚本 `test_pair.py` 实测：4 条路径（拖角色/拖对话框 × 上/下边框）全扫掠（含越界目标）下两窗口始终 ⊆ `availableGeometry()` 且互不相交、翻面后不抖、反向拖恢复跟手、关框后跟手与贴边行为不变
+- [x] 对话框默认高度减半：`chat_dialog.py` 的 `DIALOG_HEIGHT` 420 → 210（宽度 360 不变），`setMinimumSize` 同步由 (320, 320) 降为 (320, 160)——最小尺寸必须 ≤ 默认值，否则 `resize(360, 210)` 会被最小高度顶回 320；尺寸仍是模块常量集中定义；停靠/翻面/整体钳制逻辑全用动态高度计算，无硬编码 420，改完 `test_pair.py` 全量回归通过（顺带收益：栈高 240+8+210=458 < 屏高 912，「回到屏幕中央」时桌宠能精确居中不再被整体平移让位）
+- [x] 对话框外观细化（去标题 / 日志去框 / 提示文案可配置）：删除顶部「对话」标题 QLabel（窗口 `setWindowTitle("对话")` 保留），header 只留右上角小叉并继续兼作拖动区（`test_dialog_ui.py` 实测拖动不受影响）；日志区 `QPlainTextEdit` 去掉默认边框与阴影（`setFrameShape(NoFrame)` + QSS `background: transparent; border: none`），对话内容直接落在紫白对话框内部，不再另起一层「框」；输入框提示「输入消息，Enter 发送」改为可配置：`config.yaml` 新增 `chat_dialog.input_placeholder`，`ChatDialog(input_placeholder)` 构造参数传入，留空或整个 `chat_dialog` 段缺失时回退模块常量 `DEFAULT_INPUT_PLACEHOLDER`（三种情况均有断言覆盖）
 
 ## 已知问题 / TODO
 
@@ -90,6 +100,7 @@ mypet/
 - 2026-10-12：提交 `2d214c2 docs(progress): 记录 git 初始化与 sslverify=false 踩坑原因` 并推送
 - 2026-10-12：提交 `600e6da feat: 重构自主行为循环，新增随机动作状态`（4 文件，+121/−69），打标签 `v2.0.0`（备注：修改了动作循环逻辑），推送 `main` 与标签至 GitHub
 - 2026-10-12：提交 `feat: 添加右键菜单与对话框`（新增 `src/chat_dialog.py`、4 个 random GIF、右键菜单与对话期间挂起自主行为、参数调优），打标签 `v2.1.0`（备注：添加右键菜单和对话框），推送 `main` 与标签至 GitHub
+- 2026-10-12：提交 `feat: 完善对话框`（自绘白底紫边圆角+阴影+小叉、桌宠对话框联动拖动与停靠翻面、关框闪退与抢激活修复、提示文案可配置、新增 `chat_dialog_style_guide.txt`），打标签 `v2.2.0`（备注：对话框已完善），推送 `main` 与标签至 GitHub
 
 日常提交流程：`git add .` → `git commit -m "描述"` → `git push`；确认某个版本不错时可用 `git tag v1.x.x` 再 `git push --tags`。
 
@@ -103,4 +114,12 @@ mypet/
 - PySide6 的方法不能像普通 Python 方法那样被类属性覆盖：给 `QMenu.exec = fake` 打桩后实例调用仍走 C++ 原生实现（进嵌套事件循环卡死）；且程序化 `action.trigger()` 不会让 `menu.exec()` 返回该动作（即使随后 `close()`，exec 也返回 None），只有真实鼠标点击才返回被点动作。菜单测试因此拆两层：`_build_context_menu()` 验证菜单项与回调映射，`_exec_menu(menu, pos)` 这层用实例属性替换来喂入「被点中的动作」走完 `contextMenuEvent` 分发，真实路径仍是 `menu.exec(pos)`
 - 对话框「点外部即关」要用 `event()` 拦 `QEvent.Type.WindowDeactivate` 调 `self.close()`，不能用 `focusOutEvent`（它只在整个窗口失焦时触发，子控件之间切换焦点不会走这里，且窗口从未激活过时也不触发）
 - 顶层窗口 `move()` 定位的是窗口外框（frame），`geometry()` 是客户区：先 `show()` 拿到真实 `frameGeometry()` 再做屏幕钳制，否则客户区会溢出屏幕几像素（离屏 800×800 下实测 geometry 右边界 802）
+- 无边框对话框不要再加 `Qt.WindowDoesNotAcceptFocus`，否则点外部（窗口失活）关闭会失效
+- QWidget 的 QSS `border-radius` 不裁剪子控件：内层布局 margin 要 ≥ 圆角半径（12px），否则子控件直角盖住圆角；圆角外不出现黑角靠 `WA_TranslucentBackground`
+- `QGraphicsDropShadowEffect` 加在内层白底容器上（不是外层），外层必须留 margin（20px），否则阴影被裁
+- 对话框拖动只把 eventFilter 绑在 header 顶部行，标题 QLabel 设 `WA_TransparentForMouseEvents`；绑整个窗口会导致输入框选字时窗口乱跑
+- `Qt.Tool` 窗口不参与 QApplication 的「最后一个窗口关闭」判定：桌宠是 Tool、对话框是唯一普通窗口时，关掉对话框会连带退出整个程序（表现为一点小叉/点形象就闪退）；桌面常驻程序必须 `app.setQuitOnLastWindowClosed(False)`（main.py），退出只走菜单「退出」（`QApplication.quit`）
+- 「点外部即关」的对话框 + 常驻桌宠组合：Tool 窗口一点击就抢激活 → 按下瞬间对话框就收到 WindowDeactivate 被关掉，联动拖动根本来不及开始；桌宠必须带 `WindowDoesNotAcceptFocus`（不抢激活）。注意 WindowDeactivate 在按下瞬间就到、早于拖动判定，无法可靠区分「点一下」和「拖动」，所以对话框开着时点桌宠一律不再关闭对话框，关闭只留 ×/Esc/点其他应用三条路
+- 拖动钳制必须按「窗口外框」算：`move()` 收的是 frame 左上角（`_drag_offset` 也是 `frameGeometry().topLeft()` 推的），所以用 `widget.frameGeometry()` 的副本 `moveTo(目标)` 再取坐标去比 `availableGeometry()`，拿客户区 `geometry()` 会差边框像素；另外窗口某方向尺寸 ≥ 屏幕可用区时要改成直接对齐 `screen.x()/y()`，否则 `min(max(x, ...), ...)` 会因上下界颠倒把位置钳得更靠外
 - git 全局配置 `http.sslverify=false` 是必需的，不能删：Watt Toolkit（Steam++）加速 GitHub 时会把 hosts 里 `github.com` 等域名指向 `127.0.0.1` 并用自带 `SteamTools Certificate` 做中间人代理，而 git 用自己的 CA bundle（不含该证书），开启校验会报 `SSL peer certificate or SSH remote key was not OK`，导致 push/fetch 失败
+- 「两个窗口联动拖动」不能各自独立位移/各自钳制：分别钳会把两窗口往同一屏角挤、直接重叠；正确做法是合成「刚性堆叠」（锚点 + 停靠侧推另一方 → 顶到上/下边框翻面 → 组合外框整体平移 `_pair_shift`），且翻面/钳制一旦改写了落位，**必须按实际落位重算被拖方的 `_drag_offset`**（桌宠在 `mouseMoveEvent`、对话框在 `ChatDialog.eventFilter`），否则下一次 move 仍按旧偏移把窗口拽回原处，表现为「贴边/翻面后来回抖动」；另注意顶层窗口 `move()` 收的是 frame 左上角，`_drag_offset`/相对偏移一律用 `frameGeometry()` 算（本项目无边框窗客户区与外框恰好重合，`pos()` 才等价）

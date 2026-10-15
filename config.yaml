@@ -21,6 +21,9 @@ behavior:
   lost_max_ms: 0         # 走丢动画截断上限（毫秒）；0 = 完整播完 get lost.gif 后回待机
   click_max_ms: 0        # 单击动画截断上限（毫秒）；0 = 完整播完 click.gif 后回待机
 
+chat_dialog:
+  input_placeholder: "给azusa桑发消息吧"  # 输入框提示文案，可自由个性化修改；留空则用内置默认
+
 animation:
   idle: assets/idle/stand.gif
   random_actions:          # 「随机动作」可选 GIF 列表（决策选中时原地完整播一遍，不位移）

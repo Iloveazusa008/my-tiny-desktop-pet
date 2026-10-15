@@ -5,7 +5,7 @@ import os
 import random
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtGui import QAction, QMovie, QPainter
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
 
@@ -23,6 +23,10 @@ ONE_SHOT_STATES = (CLICK, LOST)  # 播完一次后自动回待机的状态
 ONE_LOOP_STATES = (*ONE_SHOT_STATES, RANDOM)  # 需从首帧完整播完一遍（末帧检测）的状态
 
 DRAG_THRESHOLD = 6  # 位移超过该像素数视为拖动，否则视为单击
+
+DIALOG_GAP = 8  # 对话框与桌宠之间的垂直间距（停靠与落位共用）
+DIALOG_ABOVE = "above"  # 对话框停靠在桌宠上方
+DIALOG_BELOW = "below"  # 对话框停靠在桌宠下方
 
 
 class PetWindow(QWidget):
@@ -46,6 +50,10 @@ class PetWindow(QWidget):
         self._press_pos: QPoint | None = None
         self._drag_offset: QPoint | None = None
         self._chat_dialog: ChatDialog | None = None  # 非 None 即对话进行中
+        # 对话框始终停靠在桌宠一侧，二者构成一个整体：拖动时整体钳入屏内，
+        # 对话框被挤到上/下边框时翻到另一侧（见 _place_pair）
+        self._dialog_side = DIALOG_ABOVE
+        self._dialog_dx = 0  # 对话框相对桌宠的水平偏移（落位时记录，拖动中保持）
 
         self._click_cap_timer = QTimer(self)
         self._click_cap_timer.setSingleShot(True)
@@ -55,6 +63,8 @@ class PetWindow(QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
+            # 桌宠不需要键盘焦点：点击/拖动不抢占激活，否则对话框会因失活触发「点外部即关」而消失
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
         self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -340,7 +350,8 @@ class PetWindow(QWidget):
         self._drag_offset = self._press_pos - self.frameGeometry().topLeft()
         self._dragging = False
 
-        self._set_state(CLICK)  # 内部会停掉待机/走动计时并打断当前动作（含随机动画）
+        if not self.chat_open:  # 对话期间点击不播 click，形象始终保持待机动画
+            self._set_state(CLICK)  # 内部会停掉待机/走动计时并打断当前动作（含随机动画）
         event.accept()
 
     def mouseMoveEvent(self, event) -> None:
@@ -351,9 +362,14 @@ class PetWindow(QWidget):
             if abs(delta.x()) < DRAG_THRESHOLD and abs(delta.y()) < DRAG_THRESHOLD:
                 return
             self._dragging = True
-            self._set_state(DRAG)
+            if not self.chat_open:  # 对话期间始终待机动画，不切 drag
+                self._set_state(DRAG)
 
-        self.move(event.globalPosition().toPoint() - self._drag_offset)
+        anchor = event.globalPosition().toPoint() - self._drag_offset  # 桌宠请求位置
+        self._drag_pair(anchor, "pet")
+        if self.frameGeometry().topLeft() != anchor:
+            # 落位被钳制/翻面改写：按当前位置重算抓取偏移，避免下一次仍按旧偏移把窗口拽回去
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:
@@ -411,8 +427,10 @@ class PetWindow(QWidget):
             self._chat_dialog.raise_()
             self._chat_dialog.activateWindow()
             return
-        dialog = ChatDialog()
+        placeholder = (self.config.get("chat_dialog") or {}).get("input_placeholder")
+        dialog = ChatDialog(placeholder)
         dialog.closed.connect(self._on_chat_closed)
+        dialog.drag_moved.connect(self._on_dialog_dragged)  # 拖对话框标题区 → 整体落位（可翻面）
         self._chat_dialog = dialog
         self._enter_idle()  # 回待机播 stand.gif
         self._idle_timer.stop()  # 对话期间不发起自主行为（_schedule_next_behavior 也会被 chat_open 拦住）
@@ -428,17 +446,105 @@ class PetWindow(QWidget):
         if self._state == IDLE and not self._idle_timer.isActive():
             self._schedule_next_behavior()
 
+    # ---------- 桌宠 + 对话框 整体落位（停靠 / 翻面 / 屏内钳制） ----------
+
+    def _on_dialog_dragged(self, delta: QPoint) -> None:
+        """对话框标题区被拖动：以「对话框请求位置」为锚，落位桌宠与对话框（可翻面）。"""
+        if self._chat_dialog is None:
+            return
+        self._drag_pair(self._chat_dialog.pos() + delta, "dialog")
+
+    def _drag_pair(self, anchor_pos: QPoint, anchor_kind: str) -> None:
+        """按被拖方的请求位置移动「桌宠 + 对话框」组合；无对话框时只把桌宠钳在屏内。"""
+        if self._chat_dialog is None:
+            self.move(self._clamp_to_screen(self, anchor_pos))
+            return
+        pet_pos, dialog_pos, side = self._place_pair(anchor_pos, self._dialog_side, anchor_kind)
+        self._dialog_side = side
+        self.move(pet_pos)
+        self._chat_dialog.move(dialog_pos)
+
+    def _dialog_anchor(self, pet: QPoint, side: str) -> QPoint:
+        """桌宠位置 → 按停靠侧推出对话框位置（保持水平偏移与 8px 间距，保证不重叠）。"""
+        y = pet.y() + self.height() + DIALOG_GAP
+        if side == DIALOG_ABOVE:
+            y = pet.y() - self._chat_dialog.height() - DIALOG_GAP
+        return QPoint(pet.x() + self._dialog_dx, y)
+
+    def _pet_anchor(self, dialog: QPoint, side: str) -> QPoint:
+        """对话框位置 → 按停靠侧反推桌宠位置。"""
+        y = dialog.y() + self._chat_dialog.height() + DIALOG_GAP
+        if side == DIALOG_BELOW:
+            y = dialog.y() - self.height() - DIALOG_GAP
+        return QPoint(dialog.x() - self._dialog_dx, y)
+
+    def _pair_box(self, pet: QPoint, dialog: QPoint) -> QRect:
+        """桌宠与对话框外框的并集（整体钳制用）。"""
+        return QRect(pet, self.frameGeometry().size()).united(
+            QRect(dialog, self._chat_dialog.frameGeometry().size())
+        )
+
+    def _should_flip(self, side: str, box: QRect, screen: QRect) -> bool:
+        """对话框所在的一端被推向并顶出上/下边框时翻到桌宠另一侧（每次落位至多翻一次）。"""
+        dialog = self._chat_dialog
+        if dialog is None:
+            return False
+        stack_h = self.frameGeometry().height() + DIALOG_GAP + dialog.frameGeometry().height()
+        if stack_h > screen.height():  # 屏幕装不下「桌宠+间距+对话框」，翻了也放不下
+            return False
+        if side == DIALOG_ABOVE:  # 上方：越界的是对话框上边
+            return box.top() < screen.top()
+        return box.bottom() > screen.bottom()  # 下方：越界的是对话框下边
+
+    def _place_pair(
+        self, anchor_pos: QPoint, side: str, anchor_kind: str
+    ) -> tuple[QPoint, QPoint, str]:
+        """唯一落位入口：anchor_pos 是被拖方的请求位置（anchor_kind="pet"/"dialog"），
+        对话框按 side 停靠在桌宠一侧；顶到上/下边框则翻面，最后把整体钳入主屏可用区。
+        返回 (桌宠位置, 对话框位置, 停靠侧)。"""
+        screen = QApplication.primaryScreen().availableGeometry()
+
+        def resolve(pos: QPoint, s: str) -> tuple[QPoint, QPoint]:
+            if anchor_kind == "pet":
+                return pos, self._dialog_anchor(pos, s)
+            return self._pet_anchor(pos, s), pos
+
+        pet, dialog = resolve(anchor_pos, side)
+        if self._should_flip(side, self._pair_box(pet, dialog), screen):
+            side = DIALOG_BELOW if side == DIALOG_ABOVE else DIALOG_ABOVE
+            pet, dialog = resolve(anchor_pos, side)
+        shift = self._pair_shift(self._pair_box(pet, dialog), screen)
+        return pet + shift, dialog + shift, side
+
+    def _pair_shift(self, box: QRect, screen: QRect) -> QPoint:
+        """把组合外框整体平移回主屏可用区（水平、垂直各自独立）；组合比屏还大时靠上/靠左。"""
+        dx = dy = 0
+        if box.left() < screen.left():
+            dx = screen.left() - box.left()
+        elif box.right() > screen.right():
+            dx = screen.right() - box.right()
+        if box.top() < screen.top():
+            dy = screen.top() - box.top()
+        elif box.bottom() > screen.bottom():
+            dy = screen.bottom() - box.bottom()
+        return QPoint(dx, dy)
+
     def _place_dialog(self, dialog: QWidget) -> None:
-        """把对话框放在桌宠正上方，放不下则落到下方，并按外框钳制在屏幕内。"""
+        """把对话框放在桌宠正上方，放不下则落到下方，并按外框钳制在屏幕内；
+        同时记录停靠侧（_dialog_side）与水平相对偏移（_dialog_dx），供拖动时保持整体关系。"""
         screen = QApplication.primaryScreen().availableGeometry()
         frame = dialog.frameGeometry()
+        above = self.y() - frame.height() - DIALOG_GAP >= screen.y()
+        self._dialog_side = DIALOG_ABOVE if above else DIALOG_BELOW
         x = self.x() + (self.width() - frame.width()) // 2
-        y = self.y() - frame.height() - 8
-        if y < screen.y():
-            y = self.y() + self.height() + 8
-        x = min(max(x, screen.x()), screen.x() + screen.width() - frame.width())
-        y = min(max(y, screen.y()), screen.y() + screen.height() - frame.height())
-        dialog.move(x, y)
+        y = (
+            self.y() - frame.height() - DIALOG_GAP
+            if above
+            else self.y() + self.height() + DIALOG_GAP
+        )
+        pos = self._clamp_to_screen(dialog, QPoint(x, y))
+        self._dialog_dx = pos.x() - self.x()  # 贴边时可能不是居中值，按实际落位记录
+        dialog.move(pos)
 
     def _open_config_file(self) -> None:
         try:
@@ -447,6 +553,26 @@ class PetWindow(QWidget):
             pass
 
     # ---------- 窗口 ----------
+
+    def _clamp_to_screen(self, widget: QWidget, pos: QPoint) -> QPoint:
+        """把窗口外框钳制在主屏可用区域内（与走动/落位同一区域），保证整个窗口可见。
+
+        widget 当前不在屏幕上时 frameGeometry 不可靠，调用方须先 show()。
+        """
+        screen = QApplication.primaryScreen().availableGeometry()
+        frame = widget.frameGeometry()
+        frame.moveTo(pos)
+        x = frame.x()
+        y = frame.y()
+        if frame.width() < screen.width():
+            x = min(max(x, screen.x()), screen.x() + screen.width() - frame.width())
+        else:  # 窗口比屏幕还宽：靠左对齐，至少不整体跑出左边
+            x = screen.x()
+        if frame.height() < screen.height():
+            y = min(max(y, screen.y()), screen.y() + screen.height() - frame.height())
+        else:
+            y = screen.y()
+        return QPoint(x, y)
 
     def _place(self, where: str) -> None:
         screen = QApplication.primaryScreen().availableGeometry()
@@ -457,6 +583,8 @@ class PetWindow(QWidget):
             x = screen.x() + screen.width() - self.width() - 20
             y = screen.y() + screen.height() - self.height() - 60
         self.move(x, y)
+        if self._chat_dialog is not None:  # 对话框开着：重新停靠到角色一侧，避免落位时压住它
+            self._drag_pair(self.pos(), "pet")
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
