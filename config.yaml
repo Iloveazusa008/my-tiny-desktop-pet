@@ -20,6 +20,17 @@ behavior:
   lost_chance: 0.4       # 每次走动结束后播放“走丢了”动画的概率（0~1）
   lost_max_ms: 0         # 走丢动画截断上限（毫秒）；0 = 完整播完 get lost.gif 后回待机
   click_max_ms: 0        # 单击动画截断上限（毫秒）；0 = 完整播完 click.gif 后回待机
+  error_max_ms: 0        # 调用失败动画截断上限（毫秒）；0 = 完整播完 error 后回待机
+
+# AI 连接：任意 OpenAI 兼容接口（云端或本地），改这里即可，代码零改动
+api:
+  base_url: "http://localhost:1234/v1"  # 例：本地 Ollama http://127.0.0.1:11434/v1
+  api_key: "sk-xxxx"                     # ← 换成你自己的 API key；本地服务可随便填非空值
+  model: "deepseek/deepseek-r1-0528-qwen3-8b"                   # ← 换成该服务可用的模型名
+  timeout_s: 60                          # 单次请求超时（秒）
+
+# 人格 prompt 文件路径（相对项目根目录）；人格完全由该文件决定，程序不附加任何倾向
+system_prompt: system_prompt.txt
 
 chat_dialog:
   input_placeholder: "给azusa桑发消息吧"  # 输入框提示文案，可自由个性化修改；留空则用内置默认

@@ -10,7 +10,7 @@ from PySide6.QtGui import QAction, QMovie, QPainter
 from PySide6.QtWidgets import QApplication, QLabel, QMenu, QWidget
 
 from .chat_dialog import ChatDialog
-from .config import CONFIG_PATH
+from .config import CONFIG_PATH, load_system_prompt
 
 IDLE = "idle"
 WALK = "walk"
@@ -18,8 +18,10 @@ CLICK = "click"
 DRAG = "drag"
 LOST = "lost"
 RANDOM = "random"
+TALK = "talk"  # AI 流式输出中：循环播 talk GIF（素材缺失则保持待机）
+ERROR = "error"  # API 调用失败：播一次 error GIF 后回待机
 
-ONE_SHOT_STATES = (CLICK, LOST)  # 播完一次后自动回待机的状态
+ONE_SHOT_STATES = (CLICK, LOST, ERROR)  # 播完一次后自动回待机的状态
 ONE_LOOP_STATES = (*ONE_SHOT_STATES, RANDOM)  # 需从首帧完整播完一遍（末帧检测）的状态
 
 DRAG_THRESHOLD = 6  # 位移超过该像素数视为拖动，否则视为单击
@@ -124,7 +126,14 @@ class PetWindow(QWidget):
     def _movie_for(self, key: str) -> QMovie:
         movie = self._movies.get(key)
         if movie is None:
-            movie = QMovie(self.config["animation"][key])
+            path = self.config["animation"].get(key)
+            if not path or not Path(path).is_file():  # talk/error 素材缺失：退回待机动画
+                key = "idle"
+                path = self.config["animation"].get("idle")
+                movie = self._movies.get(key)
+                if movie is not None:
+                    return movie
+            movie = QMovie(path)
             movie.setCacheMode(QMovie.CacheMode.CacheAll)
             if key in ONE_LOOP_STATES or key in self._random_action_keys:
                 movie.frameChanged.connect(self._on_one_shot_frame)
@@ -389,8 +398,9 @@ class PetWindow(QWidget):
     # ---------- 右键菜单 ----------
 
     def contextMenuEvent(self, event) -> None:
-        self._enter_idle()  # 右键：打断当前动作（走动/随机动画/点击），形象先回到待机
-        self._idle_timer.stop()  # 菜单期间保持静止，不发起新的行为决策
+        if not self.chat_open:  # 对话中右键：不打断 talk 动画，只照常弹菜单
+            self._enter_idle()  # 右键：打断当前动作（走动/随机动画/点击），形象先回到待机
+            self._idle_timer.stop()  # 菜单期间保持静止，不发起新的行为决策
         menu, handlers = self._build_context_menu()
         chosen = self._exec_menu(menu, event.globalPos())
         handler = handlers.get(chosen)
@@ -428,9 +438,15 @@ class PetWindow(QWidget):
             self._chat_dialog.activateWindow()
             return
         placeholder = (self.config.get("chat_dialog") or {}).get("input_placeholder")
-        dialog = ChatDialog(placeholder)
+        dialog = ChatDialog(
+            placeholder,
+            api=self.config.get("api") or {},
+            system_prompt=load_system_prompt(self.config),
+        )
         dialog.closed.connect(self._on_chat_closed)
         dialog.drag_moved.connect(self._on_dialog_dragged)  # 拖对话框标题区 → 整体落位（可翻面）
+        dialog.speaking_changed.connect(self._on_speaking_changed)  # AI 流式中播 talk，结束回待机
+        dialog.ai_failed.connect(self._on_ai_failed)  # API 失败：关框 + 播 error
         self._chat_dialog = dialog
         self._enter_idle()  # 回待机播 stand.gif
         self._idle_timer.stop()  # 对话期间不发起自主行为（_schedule_next_behavior 也会被 chat_open 拦住）
@@ -443,8 +459,31 @@ class PetWindow(QWidget):
     def _on_chat_closed(self) -> None:
         """对话框关闭：清空引用（记忆已在 ChatDialog.closeEvent 清空），恢复自主行为计时。"""
         self._chat_dialog = None
+        if self._state == TALK:  # 流式输出中途关框：请求已中断，形象回待机
+            self._set_state(IDLE)
         if self._state == IDLE and not self._idle_timer.isActive():
             self._schedule_next_behavior()
+
+    def _has_anim(self, key: str) -> bool:
+        path = self.config["animation"].get(key)
+        return bool(path) and Path(path).is_file()
+
+    def _on_speaking_changed(self, speaking: bool) -> None:
+        """AI 正在流式输出 → 循环播 talk GIF（素材缺失则保持待机）；输出结束回待机。"""
+        if speaking:
+            if self._has_anim("talk"):
+                self._set_state(TALK)
+        elif self._state == TALK:
+            self._enter_idle()
+
+    def _on_ai_failed(self, message: str) -> None:
+        """API 调用失败：关闭对话框，播一次 error GIF（素材缺失则直接回待机）。"""
+        if self._chat_dialog is not None:
+            self._chat_dialog.close()
+        if self._has_anim("error"):
+            self._set_state(ERROR)  # 播完由末帧检测/上限截断回待机
+        else:
+            self._enter_idle()
 
     # ---------- 桌宠 + 对话框 整体落位（停靠 / 翻面 / 屏内钳制） ----------
 

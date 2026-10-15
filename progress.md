@@ -13,7 +13,8 @@ mypet/
 ├── requirements.txt      # 依赖：PySide6 / PyYAML / openai
 ├── start.bat             # 启动脚本（切到脚本目录，跑 main.py，出错暂停）
 ├── main.py               # 程序入口
-├── config.yaml           # 行为与模型连接配置
+├── config.yaml           # 行为与模型连接配置（含 api 段：base_url/api_key/model）
+├── system_prompt.txt     # 人格 prompt（用户自定义，程序不附加任何人格倾向）
 ├── assets/               # GIF 素材（用户提供）
 │   ├── idle/stand.gif        # idle
 │   ├── walk/walk-left.gif    # 向左走（水平分量向左时播放）
@@ -30,8 +31,9 @@ mypet/
 │       └── wind flow.gif
 └── src/
     ├── __init__.py
-    ├── config.py         # 加载 config.yaml，解析相对动画路径为绝对路径
-    ├── chat_dialog.py    # 对话框：右键「开始对话」唤起，白底紫边圆角自绘窗体，多轮输入骨架，关闭即清空记忆
+    ├── config.py         # 加载 config.yaml，解析相对动画路径与 system_prompt 路径为绝对路径
+    ├── ai_chat.py        # OpenAI 兼容流式请求线程（QThread + delta/completed/failed 信号，abort 中断）
+    ├── chat_dialog.py    # 对话框：右键「开始对话」唤起，白底紫边圆角自绘窗体，AI 流式对话，关闭即中断请求并清空记忆
     └── pet_window.py     # 主窗口：无边框、透明、置顶；状态机 + 走动/点击/拖动 + 右键菜单 + 对话
 ```
 
@@ -41,10 +43,11 @@ mypet/
 |---|---|
 | `main.py` | 创建 QApplication，加载配置，显示 PetWindow |
 | `start.bat` | 双击启动：切到脚本目录、UTF-8 代码页、运行 main.py，失败时暂停窗口便于看报错 |
-| `config.py` | 读取 `config.yaml`，把 animation 里的相对路径（含列表型 `random_actions`）拼成绝对路径 |
-| `src/pet_window.py` | 桌宠窗口：Frameless + WA_TranslucentBackground + WindowStaysOnTopHint + Tool；状态机 idle/walk/random/click/drag/lost；QMovie 播 GIF；自主行为循环：待机随机时长（`idle_duration_min/max`，待机固定播 stand.gif）→ 按 `walk_chance`/`random_chance`/`continue_idle_chance` 三项概率加权决策「走动 / 随机动画 / 继续待机」→ 执行动作 → 回待机重新计时；走动 360° 随机、碰边按轴反向、按水平分量切左右走 GIF；随机动作从 `random_actions` 挑一个原地从首帧完整播一遍（不位移，末帧检测，`random_max_ms` 可截断）；左键单击完整播 click、按住移动播 drag（跟手拖动），用户操作打断当前动作；走完按概率播 get lost.gif；右键弹原生 QMenu 菜单（`contextMenuEvent` 先 `_enter_idle()` 回待机并停计时 → `_build_context_menu()` 返回 菜单+动作→回调 映射 → `_exec_menu()` 弹出并按映射分发 → 关闭后恢复计时）；对话管理：`_on_chat_requested` 开对话框（期间 `chat_open` 为真，`_schedule_next_behavior`/`_decide_action` 被拦住保持原地待机），`_on_chat_closed` 恢复计时；对话期间拖桌宠时对话框同步跟随，点击/拖动不切 CLICK/DRAG 动画（始终 stand.gif）；对话框永久停靠角色上/下侧（`DIALOG_GAP=8`、`_dialog_side`、`_dialog_dx`），拖动时由「被拖方请求位置 + 停靠侧」经 `_drag_pair`/`_place_pair` 推出双方位置（`_dialog_anchor`/`_pet_anchor`）、顶到上/下边框翻面（`_should_flip`）、组合外框整体平移钳入屏内（`_pair_shift`），是唯一的落位入口；`_clamp_to_screen` 按外框钳单个窗口（无对话框时的回退路径） |
-| `src/chat_dialog.py` | 对话框 `ChatDialog`：QPlainTextEdit 只读日志 + QLineEdit 输入 + 发送按钮；`_history` 仅存本次会话；小叉（objectName `closeButton`）、Esc 快捷键、失活（点外部）三种方式均 `close()`，`closeEvent` 清空历史并 emit `closed` 信号（`WA_DeleteOnClose`）；AI 未接入，暂只回显用户消息；外观按 `chat_dialog_style_guide.txt`：无系统装饰（Frameless + WA_TranslucentBackground），外层（窗体本身）margin=20 留阴影空间，内层 `QWidget#inner` QSS 白底 `#FFFFFF` + 2px 紫边 `#8A2BE2` + 圆角 12 + QGraphicsDropShadowEffect 阴影；顶部行只放右上角小叉、无标题文字，整条兼拖动区（eventFilter 按 header 区分）；日志区 NoFrame + 透明背景，内容直接写在白底上；构造函数接收 `input_placeholder`（来自 `chat_dialog.input_placeholder` 配置，留空/缺失回退内置默认） |
-| `config.yaml` | 窗口尺寸、启动位置、各状态 GIF 路径、走动速度/时长、待机随机时长、三项行为决策概率、click/lost/random 截断上限、lost 触发概率、`chat_dialog.input_placeholder`（输入框提示文案，可个性化） |
+| `config.py` | 读取 `config.yaml`，把 animation 里的相对路径（含列表型 `random_actions`）与 `system_prompt` 路径拼成绝对路径；`load_system_prompt(cfg)` 读人格文件全文（缺失返回空串） |
+| `src/ai_chat.py` | `ChatStreamWorker(QThread)`：后台迭代 OpenAI 兼容接口 stream，`delta`/`completed`/`failed` 三信号（主线程经自动队列连接收）；`abort()` 置中断标志并关闭底层流，中断后不再发任何信号；模块级 `_live_workers` 强引用池防「QThread destroyed while running」，线程结束自 `deleteLater`；model 未配置直接发 failed |
+| `src/pet_window.py` | 桌宠窗口：Frameless + WA_TranslucentBackground + WindowStaysOnTopHint + Tool；状态机 idle/walk/random/click/drag/lost/talk/error；QMovie 播 GIF；自主行为循环：待机随机时长（`idle_duration_min/max`，待机固定播 stand.gif）→ 按 `walk_chance`/`random_chance`/`continue_idle_chance` 三项概率加权决策「走动 / 随机动画 / 继续待机」→ 执行动作 → 回待机重新计时；走动 360° 随机、碰边按轴反向、按水平分量切左右走 GIF；随机动作从 `random_actions` 挑一个原地从首帧完整播一遍（不位移，末帧检测，`random_max_ms` 可截断）；左键单击完整播 click、按住移动播 drag（跟手拖动），用户操作打断当前动作；走完按概率播 get lost.gif；右键弹原生 QMenu 菜单（`contextMenuEvent` 非对话时先 `_enter_idle()` 回待机并停计时 → `_build_context_menu()` 返回 菜单+动作→回调 映射 → `_exec_menu()` 弹出并按映射分发 → 关闭后恢复计时；对话中右键不打断 talk）；对话管理：`_on_chat_requested` 开对话框（期间 `chat_open` 为真，自主行为被拦住保持原地待机），`_on_chat_closed` 恢复计时；AI 接线：`speaking_changed(True)` 播 talk GIF（素材缺失保持待机）、`(False)` 回待机，`ai_failed` 关对话框并播一次 error GIF（素材缺失直接回待机），关框时若在 TALK 态强制回待机；对话期间拖桌宠时对话框同步跟随，点击/拖动不切 CLICK/DRAG 动画（始终 stand.gif）；对话框永久停靠角色上/下侧（`DIALOG_GAP=8`、`_dialog_side`、`_dialog_dx`），拖动时由「被拖方请求位置 + 停靠侧」经 `_drag_pair`/`_place_pair` 推出双方位置（`_dialog_anchor`/`_pet_anchor`）、顶到上/下边框翻面（`_should_flip`）、组合外框整体平移钳入屏内（`_pair_shift`），是唯一的落位入口；`_clamp_to_screen` 按外框钳单个窗口（无对话框时的回退路径） |
+| `src/chat_dialog.py` | 对话框 `ChatDialog`：QPlainTextEdit 只读日志 + QLineEdit 输入 + 发送按钮；`_history` 仅存本次会话；小叉（objectName `closeButton`）是唯一关闭路径（Esc 快捷键与失活「点外部即关」均已移除，点形象/点外部都不再关闭）；日志区只按行显示用户提问与 AI 回复，不加「你：/我：」称谓前缀；AI 流式对话：发送即 `ChatStreamWorker` 后台请求（system_prompt + history），delta 缓冲后按 `STREAM_FLUSH_MS=50ms` 固定频率刷进日志区（不做每 token 重绘），完成写回 `_history`；输出中输入框与发送键禁用（`_set_input_enabled`），`_send` 也有 `_worker` 非空双保险；`closeEvent` 调 `worker.abort()` 立即中断请求；失败发 `ai_failed(str)` 由桌宠关框播 error；`speaking_changed(bool)` 上报流式中状态给桌宠播 talk；外观按 `chat_dialog_style_guide.txt`：无系统装饰（Frameless + WA_TranslucentBackground），外层（窗体本身）margin=20 留阴影空间，内层 `QWidget#inner` QSS 白底 `#FFFFFF` + 2px 紫边 `#8A2BE2` + 圆角 12 + QGraphicsDropShadowEffect 阴影；顶部行只放右上角小叉、无标题文字，整条兼拖动区（eventFilter 按 header 区分）；日志区 NoFrame + 透明背景，内容直接写在白底上；构造函数接收 `input_placeholder`（来自 `chat_dialog.input_placeholder` 配置）、`api`（连接配置）、`system_prompt`（人格全文） |
+| `config.yaml` | 窗口尺寸、启动位置、各状态 GIF 路径、走动速度/时长、待机随机时长、三项行为决策概率、click/lost/random/error 截断上限、lost 触发概率、`api`（base_url/api_key/model/timeout_s）、`system_prompt`（人格文件路径）、`chat_dialog.input_placeholder` |
 
 ## 已实现的功能
 
@@ -81,15 +84,17 @@ mypet/
 - [x] 拖动不重叠 + 边框翻面：对话框改为永久停靠角色上/下侧（新常量 `DIALOG_GAP=8`、`DIALOG_ABOVE/BELOW`，成员 `_dialog_side` 记停靠侧、`_dialog_dx` 记水平相对偏移，`_place_dialog` 落位时一并记录）；拖动时不再「各自位移」，而是由「被拖方的请求位置 + 停靠侧」经 `_drag_pair` → `_place_pair`（唯一落位入口）推出双方位置：`_dialog_anchor`（桌宠→对话框）/`_dialog` 对应 `_pet_anchor`（对话框→桌宠）反推，`_pair_box` 求组合外框，`_should_flip` 判定对话框被顶到上/下边框（`DIALOG_ABOVE` 且 `box.top()<screen.top()`、`DIALOG_BELOW` 且 `box.bottom()>screen.bottom()`，栈高超过屏高则不翻）则翻到另一侧（每次落位至多翻一次），最后 `_pair_shift` 把组合外框整体平移钳入主屏可用区；翻面/钳制改写落位后，`mouseMoveEvent`（桌宠侧）与 `ChatDialog.eventFilter`（对话框侧）都必须按当前实际位置重算 `_drag_offset`，否则下一次 move 仍按旧偏移把窗口拽回、翻面来回抖；`_place("center")` 落位后也经 `_drag_pair` 重新停靠，保证菜单「回到屏幕中央」不压住对话框；无对话框时回退 `_clamp_to_screen` 单窗口钳制。临时脚本 `test_pair.py` 实测：4 条路径（拖角色/拖对话框 × 上/下边框）全扫掠（含越界目标）下两窗口始终 ⊆ `availableGeometry()` 且互不相交、翻面后不抖、反向拖恢复跟手、关框后跟手与贴边行为不变
 - [x] 对话框默认高度减半：`chat_dialog.py` 的 `DIALOG_HEIGHT` 420 → 210（宽度 360 不变），`setMinimumSize` 同步由 (320, 320) 降为 (320, 160)——最小尺寸必须 ≤ 默认值，否则 `resize(360, 210)` 会被最小高度顶回 320；尺寸仍是模块常量集中定义；停靠/翻面/整体钳制逻辑全用动态高度计算，无硬编码 420，改完 `test_pair.py` 全量回归通过（顺带收益：栈高 240+8+210=458 < 屏高 912，「回到屏幕中央」时桌宠能精确居中不再被整体平移让位）
 - [x] 对话框外观细化（去标题 / 日志去框 / 提示文案可配置）：删除顶部「对话」标题 QLabel（窗口 `setWindowTitle("对话")` 保留），header 只留右上角小叉并继续兼作拖动区（`test_dialog_ui.py` 实测拖动不受影响）；日志区 `QPlainTextEdit` 去掉默认边框与阴影（`setFrameShape(NoFrame)` + QSS `background: transparent; border: none`），对话内容直接落在紫白对话框内部，不再另起一层「框」；输入框提示「输入消息，Enter 发送」改为可配置：`config.yaml` 新增 `chat_dialog.input_placeholder`，`ChatDialog(input_placeholder)` 构造参数传入，留空或整个 `chat_dialog` 段缺失时回退模块常量 `DEFAULT_INPUT_PLACEHOLDER`（三种情况均有断言覆盖）
+- [x] AI 接入（OpenAI 兼容接口，流式）：`config.yaml` 新增 `api` 段（`base_url`/`api_key`/`model`/`timeout_s`，云端/本地改配置即切、代码零改动）与 `system_prompt`（人格文件路径，程序不附加任何人格倾向）；新增 `system_prompt.txt` 人格文件；新增 `src/ai_chat.py` 的 `ChatStreamWorker(QThread)` 后台流式请求（`delta`/`completed`/`failed` 信号，`abort()` 中断后不再发信号）；对话框发送即请求，增量按 50ms 固定频率刷进日志区（不做每 token 重绘），完成把 assistant 回复写回 `_history` 支持多轮上下文；输出中输入框/发送键禁用、完成后恢复；输出中关闭对话框（×/Esc/点外部）立即 `abort()` 中断请求；API 失败发 `ai_failed` → 桌宠关对话框并播一次 error GIF（素材缺失直接回待机，配 `error_max_ms` 截断）；`model` 未配置直接报错不发请求；离屏 mock OpenAI SSE 服务实测：流式全量文本、401 走 failed、model 缺失报配置错、abort 后不发 completed/failed 共 8 项 + 对话框/桌宠接线 11 项（禁用输入、talk 态切换、流式写日志、上下文、失败关框播 error、关闭中断回待机）全通过
+- [x] talk 状态：AI 流式输出期间桌宠循环播 talk GIF（`speaking_changed(True)` 触发，素材缺失保持待机动画），输出结束回待机；对话中右键不再打断 talk；关框时若在 TALK 态强制回待机
+- [x] 日志去称谓前缀：删除用户行「你：」与 AI 行「我：」，用户提问与 AI 回复各占一行直接显示（AI 回复先 `appendPlainText("")` 另起一行再流式插入）
+- [x] 关闭路径收窄为仅小叉：移除 Esc 快捷键与 `event()` 里 WindowDeactivate 的「点外部即关」，点形象、点外部、按 Esc 均不再关闭对话框，只有右上角「×」可关（`closeEvent` 的清记忆/中断/emit closed 逻辑不变；注意这偏离了 handbook 第四章「X、Esc、点外部均视为关闭」，以用户 2026-10-15 的明确要求为准）
+- [x] 对话框置顶：`ChatDialog` 补上 `WindowStaysOnTopHint`（桌宠窗口有、对话框此前漏加），修复桌宠在最上层但对话框被其他窗口遮挡的问题
 
 ## 已知问题 / TODO
 
-- [ ] `talk`、`error` GIF 未制作，配置暂留空，待素材就绪后填路径并接入状态机
-- [ ] 气泡（QPainter 自绘圆角矩形+尾巴、自动换行、流式刷新）未实现
-- [ ] 对话框待 AI 接入后补齐：流式输出呈现、输出中禁用用户输入、输出中关闭即中断请求（多轮输入骨架、关闭清空、关闭恢复走动已实现）
-- [ ] AI 接入（OpenAI SDK、base_url 切换、流式、失败播 error）未实现
+- [ ] `talk`、`error` GIF 未制作，配置暂留空（代码已接入：有素材即播，缺失自动回退待机），待素材就绪后在 `config.yaml` 填路径
+- [ ] 气泡（QPainter 自绘圆角矩形+尾巴、自动换行、流式刷新）未实现；AI 回复暂呈现于对话框日志区
 - [ ] 气泡样式配置项缺失：圆角、边框色、填充色、透明度、字体、字号、最大宽度
-- [ ] `system_prompt.txt` 人格配置文件未创建
 
 ## 版本控制（Git）
 
@@ -101,10 +106,16 @@ mypet/
 - 2026-10-12：提交 `600e6da feat: 重构自主行为循环，新增随机动作状态`（4 文件，+121/−69），打标签 `v2.0.0`（备注：修改了动作循环逻辑），推送 `main` 与标签至 GitHub
 - 2026-10-12：提交 `feat: 添加右键菜单与对话框`（新增 `src/chat_dialog.py`、4 个 random GIF、右键菜单与对话期间挂起自主行为、参数调优），打标签 `v2.1.0`（备注：添加右键菜单和对话框），推送 `main` 与标签至 GitHub
 - 2026-10-12：提交 `feat: 完善对话框`（自绘白底紫边圆角+阴影+小叉、桌宠对话框联动拖动与停靠翻面、关框闪退与抢激活修复、提示文案可配置、新增 `chat_dialog_style_guide.txt`），打标签 `v2.2.0`（备注：对话框已完善），推送 `main` 与标签至 GitHub
+- 2026-10-15：提交 `feat: 接入 AI 对话并修改窗口`（新增 `src/ai_chat.py` 流式线程与 `system_prompt.txt` 人格、`api` 配置段、talk/error 状态接线、关闭方式收窄为仅小叉、对话框置顶、handbook 同步），打标签 `v2.3.0`（备注：接入ai对话加修改窗口），推送 `main` 与标签至 GitHub
 
 日常提交流程：`git add .` → `git commit -m "描述"` → `git push`；确认某个版本不错时可用 `git tag v1.x.x` 再 `git push --tags`。
 
 ## 备注 / 踩坑记录
+
+- QThread 被对话框持为子对象且对话框 `WA_DeleteOnClose`：关框时线程可能还在跑，会崩「QThread: Destroyed while thread is still running」；`ChatStreamWorker` 不设 parent，模块级 `_live_workers` 强引用代持，`finished` 后自 `deleteLater`
+- 流式中断不能只靠标志位：`abort()` 还要 `stream.close()` 关掉底层 HTTP 流，否则线程会阻塞在 `next()` 等下一个 token；中断后 `run()` 内所有出口都检查 `_aborted`，保证不再 emit 任何信号（避免往已销毁的对话框发信号）
+- 离屏测试 QApplication 必须 `setQuitOnLastWindowClosed(False)`，否则场景里「关闭对话框」那一步会直接让 `app.exec()` 返回，后续定时器场景全部不执行（表现为测试只跑到一半还显示全 PASS）
+- delta 刷新不能每个 token 重绘：`_pending_text` 缓冲 + 50ms 单次 QTimer 统一 `insertPlainText`，与气泡刷新同一思路
 
 - PySide6 6.12 的 `QMovie` 没有 `setLoopCount`：单次/完整播完靠 `frameChanged` 检测末帧（`_on_one_shot_frame`）+ 可选 `*_max_ms` 定时截断双保险；click/lost/random 共用此机制（见 `ONE_LOOP_STATES`）
 - 随机动画「完整播一遍」= 从首帧播到末帧即结束。当前 `assets/random/` 素材约 101 帧、单遍约 10 秒，嫌长可配 `random_max_ms` 截断
